@@ -93,13 +93,16 @@ def app_switcher():
     time.sleep(0.8)
 
 
-def open_app(name, package=None):
+def open_app(name, package=None, icon_offset_y=-40):
     """Open an app by launching its package via `monkey`, or via UI search.
 
-    If package is provided, uses `am start`. Otherwise, goes Home →
+    If package is provided, uses `monkey` launch. Otherwise, goes Home →
     tries to find and tap the app icon via OCR, which is less reliable
     but doesn't require knowing the package name.
-    """
+
+    icon_offset_y: pixels to tap above the text label center when finding
+    by icon label. -40 works for most launchers (icon above label).
+    Adjust for custom launchers or unusual screen densities."""
     from .device import adb
     serial = _pick_device()
 
@@ -131,9 +134,12 @@ def open_app(name, package=None):
 # must not read as "done" — only the pixels going still means the end.
 
 
-def _content_texts(min_conf=0.3, top_frac=0.08, bottom_frac=0.93):
-    """OCR of the scrollable content area, excluding status bar and nav bar."""
-    img = screenshot()
+def _content_texts(min_conf=0.3, top_frac=0.08, bottom_frac=0.93, image_path=None):
+    """OCR of the scrollable content area, excluding status bar and nav bar.
+
+    If image_path is provided, reuses an existing screenshot instead of
+    taking a new one (avoids redundant screencap during scroll settlement)."""
+    img = image_path if image_path else screenshot()
     w, h = screen_size()
     top = int(h * top_frac)
     bot = int(h * bottom_frac)
@@ -185,8 +191,14 @@ def scroll_screen(direction="up", amount=500, settle=2.5, moved_thresh=0.5):
         time.sleep(0.35)
 
     after = prev or frozenset()
+    if not before and not after:
+        # Both empty: no text content on screen at all (e.g. pure image page).
+        # Report no movement to prevent callers from thinking the list advanced.
+        moved = False
+    else:
+        moved = _overlap(before, after) < moved_thresh
     return {
-        "moved": _overlap(before, after) < moved_thresh,
+        "moved": moved,
         "overlap": round(_overlap(before, after), 3),
         "before": before,
         "after": after,

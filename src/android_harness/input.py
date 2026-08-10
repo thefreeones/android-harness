@@ -8,6 +8,7 @@ injection works regardless of what's on the PC screen.
 """
 
 import time
+import shlex
 
 from .device import adb, _pick_device
 
@@ -135,7 +136,9 @@ def type_text(text):
 
     # ASCII-only path: fast, no IME switching needed
     if text.isascii():
-        safe = text.replace(" ", "%s").replace("'", "\\'")
+        # shlex.quote prevents shell metacharacters (*, ;, $, etc.)
+        # from being interpreted by the device shell
+        safe = shlex.quote(text)
         adb(*_dev_args(), "shell", "input", "text", safe)
         return
 
@@ -155,8 +158,8 @@ def type_text(text):
     time.sleep(0.5)  # Wait for IME to connect to the InputConnection
 
     # 2. Broadcast the text (ADBKeyboard receives and commits it)
-    # Escape single quotes in the message
-    safe_text = text.replace("'", "\\'")
+    # Use shlex.quote to prevent shell injection via $(), backticks, etc.
+    safe_text = shlex.quote(text)
     adb(*_dev_args(), "shell", "am", "broadcast", "-a", "ADB_INPUT_TEXT",
         "--es", "msg", safe_text)
     time.sleep(0.5)  # Wait for text to be committed

@@ -9,31 +9,38 @@ Tests:
 import sys, time, json, os
 from pathlib import Path
 
-sys.path.insert(0, r"D:\Vibecoding_project\android-harness\.venv\Lib\site-packages")
-sys.path.insert(0, r"D:\Vibecoding_project\android-harness\src")
+# Project root detection — works from any working directory
+PROJECT_ROOT = Path(__file__).resolve().parent
+VENV_SITE = str(PROJECT_ROOT / ".venv" / "Lib" / "site-packages")
+SRC_DIR = str(PROJECT_ROOT / "src")
 
-# Fix: add nvidia cuDNN DLL paths to PATH for PaddlePaddle GPU
-import os as _os
-_cudnn_bin = r"D:\Vibecoding_project\android-harness\.venv\Lib\site-packages\nvidia\cudnn\bin"
-_cublas_bin = r"D:\Vibecoding_project\android-harness\.venv\Lib\site-packages\nvidia\cublas\bin"
-for _p in [_cudnn_bin, _cublas_bin]:
-    if _os.path.isdir(_p) and _p not in _os.environ.get("PATH", ""):
-        _os.environ["PATH"] = _p + ";" + _os.environ.get("PATH", "")
-        _os.add_dll_directory(_p)
+sys.path.insert(0, VENV_SITE)
+sys.path.insert(0, SRC_DIR)
+
+# Fix: add nvidia cuDNN DLL paths for PaddlePaddle GPU
+_cudnn_bin = PROJECT_ROOT / ".venv" / "Lib" / "site-packages" / "nvidia" / "cudnn" / "bin"
+_cublas_bin = PROJECT_ROOT / ".venv" / "Lib" / "site-packages" / "nvidia" / "cublas" / "bin"
+for _p in [str(_cudnn_bin), str(_cublas_bin)]:
+    if os.path.isdir(_p) and _p not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = _p + ";" + os.environ.get("PATH", "")
+        os.add_dll_directory(_p)
 
 from android_harness.capture import screenshot
 from android_harness.device import device_info, _pick_device, adb
 from android_harness.helpers import home, wait as wait_ms
 from android_harness.input import keyevent
 
-OUT = Path(r"D:\Vibecoding_project\benchmark_results")
+OUT = PROJECT_ROOT / "benchmark_results"
 OUT.mkdir(exist_ok=True)
 serial = _pick_device()
 info = device_info()
 
 
 def open_app_pkg(pkg):
-    """Open an app by package name."""
+    """Open an app by package name. Only allows valid Java-style package names."""
+    import re
+    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_.]*$', pkg):
+        raise ValueError(f"Invalid package name: {pkg!r}")
     adb("-s", serial, "shell", "monkey", "-p", pkg,
         "-c", "android.intent.category.LAUNCHER", "1")
 

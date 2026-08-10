@@ -11,6 +11,7 @@ a bounding box in native screen coordinates, ready for tap().
 import logging
 import os
 import time
+import threading
 from pathlib import Path
 
 from .capture import screenshot
@@ -21,6 +22,7 @@ logging.getLogger("paddle").setLevel(logging.WARNING)
 _READER = None
 _READER_BACKEND = None
 _READER_GPU = None
+_READER_LOCK = threading.Lock()
 _GPU_AVAILABLE = None
 
 
@@ -82,6 +84,7 @@ def _get_reader(backend=None, gpu=None):
     if gpu is None:
         gpu = _check_gpu()
 
+    # Fast path: reader already cached with matching config
     if (
         _READER is not None
         and _READER_BACKEND == backend
@@ -89,26 +92,36 @@ def _get_reader(backend=None, gpu=None):
     ):
         return _READER
 
-    if backend == "paddleocr":
-        from paddleocr import PaddleOCR
+    # Slow path: create reader under lock to prevent race conditions
+    with _READER_LOCK:
+        # Double-check: another thread might have created the reader
+        if (
+            _READER is not None
+            and _READER_BACKEND == backend
+            and _READER_GPU == gpu
+        ):
+            return _READER
 
-        mode = "GPU" if gpu else "CPU"
-        _READER = PaddleOCR(
-            lang="ch",
-            use_angle_cls=True,
-            use_gpu=gpu,
-            show_log=False,
-        )
-    else:
-        import easyocr
+        if backend == "paddleocr":
+            from paddleocr import PaddleOCR
 
-        mode = "GPU (EasyOCR)" if gpu else "CPU (EasyOCR)"
-        _READER = easyocr.Reader(
-            ["ch_sim", "en"], gpu=gpu if gpu is not None else True, verbose=False
-        )
+            mode = "GPU" if gpu else "CPU"
+            _READER = PaddleOCR(
+                lang="ch",
+                use_angle_cls=True,
+                use_gpu=gpu,
+                show_log=False,
+            )
+        else:
+            import easyocr
 
-    _READER_BACKEND, _READER_GPU = backend, gpu
-    return _READER
+            mode = "GPU (EasyOCR)" if gpu else "CPU (EasyOCR)"
+            _READER = easyocr.Reader(
+                ["ch_sim", "en"], gpu=gpu if gpu is not None else True, verbose=False
+            )
+
+        _READER_BACKEND, _READER_GPU = backend, gpu
+        return _READER
 
 
 def _paddle_results(reader, image_path, min_confidence):
@@ -158,33 +171,44 @@ def ocr(min_confidence=0.3, backend=None, gpu=None, image_path=None,
     reader = _get_reader(backend=backend, gpu=gpu)
     img = image_path or screenshot()
 
+    pp_file = None
     if preprocess:
-        img = _preprocess_image(img)
+        pp_file = _preprocess_image(img)
+        if pp_file != img:  # preprocessor returned a different file
+            img = pp_file
 
-    backend = backend or "paddleocr"
-    if backend == "paddleocr":
-        return _paddle_results(reader, img, min_confidence)
-    else:
-        import easyocr
+    try:
+        backend = backend or "paddleocr"
+        if backend == "paddleocr":
+            return _paddle_results(reader, img, min_confidence)
+        else:
+            import easyocr
 
-        raw = reader.readtext(img)
-        out = []
-        for bbox, text, conf in raw:
-            if conf < min_confidence:
-                continue
-            xs = [p[0] for p in bbox]
-            ys = [p[1] for p in bbox]
-            out.append(
-                {
-                    "text": text,
-                    "confidence": round(float(conf), 3),
-                    "x": round((min(xs) + max(xs)) / 2, 1),
-                    "y": round((min(ys) + max(ys)) / 2, 1),
-                    "w": round(max(xs) - min(xs), 1),
-                    "h": round(max(ys) - min(ys), 1),
-                }
-            )
-        return out
+            raw = reader.readtext(img)
+            out = []
+            for bbox, text, conf in raw:
+                if conf < min_confidence:
+                    continue
+                xs = [p[0] for p in bbox]
+                ys = [p[1] for p in bbox]
+                out.append(
+                    {
+                        "text": text,
+                        "confidence": round(float(conf), 3),
+                        "x": round((min(xs) + max(xs)) / 2, 1),
+                        "y": round((min(ys) + max(ys)) / 2, 1),
+                        "w": round(max(xs) - min(xs), 1),
+                        "h": round(max(ys) - min(ys), 1),
+                    }
+                )
+            return out
+    finally:
+        if pp_file and pp_file != img:
+            try:
+                import os as _os2
+                _os2.unlink(pp_file)
+            except OSError:
+                pass  # temp file already gone or permission denied — not fatal
 
 
 def find_text(query, exact=False, min_confidence=0.3, image_path=None,
